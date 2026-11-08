@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProcessedCreditApplicationMessage",
+  "type": "object",
+  "required": ["request_id", "processed_at", "preprocessing_status", "features", "source", "schema_version"],
+  "properties": {
+    "request_id": { "type": "string" },
+    "processed_at": { "type": "string", "format": "date-time" },
+    "preprocessing_status": { "type": "string", "enum": ["SUCCESS"] },
+    "features": {
+      "type": "object",
+      "required": ["income_norm", "debt_ratio", "age_score", "employment_score"],
+      "properties": {
+        "income_norm": { "type": "number", "minimum": 0, "maximum": 1 },
+        "debt_ratio": { "type": "number", "minimum": 0 },
+        "age_score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "employment_score": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "source": { "type": "string" },
+    "schema_version": { "type": "string" }
+  }
+}

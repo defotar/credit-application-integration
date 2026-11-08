@@ -1,0 +1,10 @@
+{
+  "request_id": "REQ-002",
+  "age": 45,
+  "monthly_income": 45000,
+  "current_debt_payment": 24000,
+  "requested_amount": 300000,
+  "requested_term_months": 36,
+  "employment_type": "self_employed",
+  "missing_values": false
+}

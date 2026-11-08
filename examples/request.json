@@ -1,0 +1,10 @@
+{
+  "request_id": "REQ-001",
+  "age": 25,
+  "monthly_income": 85000,
+  "current_debt_payment": 12000,
+  "requested_amount": 150000,
+  "requested_term_months": 12,
+  "employment_type": "employee",
+  "missing_values": false
+}

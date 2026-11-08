@@ -1,0 +1,10 @@
+{
+  "request_id": "REQ-BAD",
+  "age": 17,
+  "monthly_income": 0,
+  "current_debt_payment": -100,
+  "requested_amount": 150000,
+  "requested_term_months": 12,
+  "employment_type": "employee",
+  "missing_values": false
+}

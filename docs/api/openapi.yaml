@@ -1,0 +1,215 @@
+openapi: 3.1.0
+info:
+  title: Сервис предобработки кредитных заявок
+  version: 2.0.0
+  description: |
+    Контракт AS-IS — как реализовано в прототипе. Отличия TO-BE отмечены в описаниях
+    операций пометкой «TO-BE» и разобраны в docs/06-gap-analysis.md.
+servers:
+  - url: http://localhost:8000
+tags:
+  - name: Заявки
+  - name: Ручная проверка
+paths:
+  /applications:
+    post:
+      tags: [Заявки]
+      summary: Подать заявку
+      description: |
+        Проверяет заявку, считает признаки, записывает статус PROCESSING и публикует сообщение
+        в processed_data_queue.
+
+        TO-BE: повтор с тем же request_id и теми же данными → 200 с текущим статусом без
+        повторной публикации; с другими данными → 409 (G-4). Публикация через outbox, ответ
+        не зависит от доступности брокера (G-5).
+      operationId: createApplication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreditApplication' }
+            example:
+              request_id: REQ-001
+              age: 25
+              monthly_income: 85000
+              current_debt_payment: 12000
+              requested_amount: 150000
+              requested_term_months: 12
+              employment_type: employee
+              missing_values: false
+      responses:
+        '202':
+          description: Заявка принята в обработку
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApplicationAccepted' }
+        '400':
+          description: В заявке установлен признак пропущенных значений
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: Нарушены ограничения полей
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ValidationError' }
+        '503':
+          description: Брокер недоступен после 10 попыток (около 20 с). Заявка остаётся в PROCESSING (G-5)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /status/{request_id}:
+    get:
+      tags: [Заявки]
+      summary: Статус заявки
+      description: |
+        Для неизвестного номера возвращает 200 и status = NOT_FOUND.
+        TO-BE: 404 (G-9).
+      operationId: getStatus
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Запись о заявке
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApplicationRecord' }
+  /manual-review:
+    get:
+      tags: [Ручная проверка]
+      summary: Заявки на ручной проверке
+      description: TO-BE — только для роли «кредитный специалист» (G-7).
+      operationId: listManualReview
+      responses:
+        '200':
+          description: Список заявок со статусом MANUAL_REVIEW
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [count, applications]
+                properties:
+                  count: { type: integer, minimum: 0 }
+                  applications:
+                    type: array
+                    items: { $ref: '#/components/schemas/ApplicationRecord' }
+  /manual-review/{request_id}/decision:
+    post:
+      tags: [Ручная проверка]
+      summary: Решение специалиста
+      description: |
+        Меняет статус MANUAL_REVIEW на APPROVED или REJECTED.
+        TO-BE: обязательный reason_code из справочника, автор из токена (G-7, G-8).
+      operationId: decideManualReview
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReviewDecision' }
+      responses:
+        '200':
+          description: Решение сохранено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApplicationRecord' }
+        '404':
+          description: Заявка не найдена
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: Заявка не на ручной проверке
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /health:
+    get:
+      summary: Проверка работоспособности
+      operationId: health
+      responses:
+        '200':
+          description: Сервис работает
+components:
+  parameters:
+    RequestId:
+      name: request_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1 }
+  schemas:
+    EmploymentType:
+      type: string
+      enum: [employee, self_employed, pensioner, student, unemployed]
+    Status:
+      type: string
+      enum: [PROCESSING, MANUAL_REVIEW, APPROVED, REJECTED, NOT_FOUND]
+      description: TO-BE — добавляется FAILED, убирается NOT_FOUND
+    CreditApplication:
+      type: object
+      required: [request_id, age, monthly_income, current_debt_payment, requested_amount,
+                 requested_term_months, employment_type, missing_values]
+      properties:
+        request_id: { type: string, minLength: 1, description: Номер заявки, формирует клиентский интерфейс }
+        age: { type: integer, minimum: 18, maximum: 75 }
+        monthly_income: { type: number, exclusiveMinimum: 0, description: Ежемесячный доход, ₽ }
+        current_debt_payment: { type: number, minimum: 0, description: Платежи по текущим кредитам в месяц, ₽ }
+        requested_amount: { type: number, exclusiveMinimum: 0, description: 'Сумма кредита, ₽. AS-IS в решении не участвует (G-1)' }
+        requested_term_months: { type: integer, minimum: 1, maximum: 84, description: 'Срок, мес. AS-IS в решении не участвует (G-1)' }
+        employment_type: { $ref: '#/components/schemas/EmploymentType' }
+        missing_values: { type: boolean, description: 'Признак пропусков; true → 400' }
+    ApplicationAccepted:
+      type: object
+      required: [request_id, status, message]
+      properties:
+        request_id: { type: string }
+        status: { $ref: '#/components/schemas/Status' }
+        message: { type: string }
+    Features:
+      type: object
+      required: [income_norm, debt_ratio, age_score, employment_score]
+      properties:
+        income_norm: { type: number, minimum: 0, maximum: 1 }
+        debt_ratio: { type: number, minimum: 0 }
+        age_score: { type: number, enum: [0.7, 1.0] }
+        employment_score: { type: number, minimum: 0, maximum: 1 }
+    ApplicationRecord:
+      type: object
+      required: [request_id, status]
+      properties:
+        request_id: { type: string }
+        status: { $ref: '#/components/schemas/Status' }
+        score: { type: number, minimum: 0, maximum: 100 }
+        manual_review_required: { type: boolean }
+        created_at: { type: string, format: date-time }
+        processed_at: { type: string, format: date-time }
+        source_data: { $ref: '#/components/schemas/CreditApplication' }
+        features: { $ref: '#/components/schemas/Features' }
+        specialist_decision: { type: string, enum: [APPROVED, REJECTED] }
+        specialist_comment: { type: string }
+        reviewed_at: { type: string, format: date-time }
+        message: { type: string }
+    ReviewDecision:
+      type: object
+      required: [decision]
+      properties:
+        decision: { type: string, enum: [APPROVED, REJECTED] }
+        comment: { type: string, default: '' }
+    Error:
+      type: object
+      required: [detail]
+      properties:
+        detail: { type: string }
+    ValidationError:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            properties:
+              loc: { type: array, items: { type: [string, integer] } }
+              msg: { type: string }
+              type: { type: string }

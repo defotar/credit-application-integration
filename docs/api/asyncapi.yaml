@@ -1,0 +1,96 @@
+asyncapi: 3.0.0
+info:
+  title: Передача подготовленных кредитных заявок
+  version: 1.0.0
+  description: |
+    Очередь точка-точка между сервисом предобработки и системой принятия решений.
+    Гарантия доставки — at-least-once: потребитель подтверждает сообщение после записи результата,
+    дубликаты отсекаются по request_id и финальному статусу.
+    Каналы с пометкой TO-BE в прототипе отсутствуют (docs/06-gap-analysis.md, G-2 и G-6).
+defaultContentType: application/json
+servers:
+  local:
+    host: localhost:5672
+    protocol: amqp
+    protocolVersion: 0-9-1
+channels:
+  processedData:
+    address: processed_data_queue
+    description: Подготовленные заявки
+    messages:
+      processedApplication:
+        $ref: '#/components/messages/ProcessedApplication'
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          name: processed_data_queue
+          durable: true
+          exclusive: false
+          autoDelete: false
+  processedDataDlq:
+    address: processed_data_dlq
+    description: TO-BE. Сообщения, которые не удалось обработать; причина — в заголовке x-error
+    messages:
+      processedApplication:
+        $ref: '#/components/messages/ProcessedApplication'
+  decisions:
+    address: decision_made_queue
+    description: TO-BE. Решения системы — владельцу статуса заявки вместо записи в общий файл
+    messages:
+      decisionMade:
+        $ref: '#/components/messages/DecisionMade'
+operations:
+  publishProcessed:
+    action: send
+    channel: { $ref: '#/channels/processedData' }
+    summary: Сервис предобработки публикует заявку с признаками
+    bindings:
+      amqp:
+        deliveryMode: 2
+  consumeProcessed:
+    action: receive
+    channel: { $ref: '#/channels/processedData' }
+    summary: Система решений считает score и выносит решение
+    description: |
+      prefetch = 1, ack после записи результата.
+      AS-IS: при ошибке nack без повтора — сообщение теряется.
+      TO-BE: nack → dead-letter exchange → processed_data_dlq.
+  publishDecision:
+    action: send
+    channel: { $ref: '#/channels/decisions' }
+    summary: TO-BE. Система решений сообщает решение
+components:
+  messages:
+    ProcessedApplication:
+      name: ProcessedApplication
+      title: Подготовленная заявка
+      contentType: application/json
+      correlationId:
+        location: $message.payload#/request_id
+      payload:
+        $ref: '../../schemas/processed_message_schema.json'
+      examples:
+        - name: typical
+          payload:
+            request_id: REQ-001
+            processed_at: '2026-11-08T12:00:00+00:00'
+            preprocessing_status: SUCCESS
+            features: { income_norm: 0.5667, debt_ratio: 0.1412, age_score: 1.0, employment_score: 0.8 }
+            source: credit_application_web_ui
+            schema_version: '1.0'
+    DecisionMade:
+      name: DecisionMade
+      title: TO-BE. Решение по заявке
+      contentType: application/json
+      payload:
+        type: object
+        required: [request_id, decision, score, reason_code, decided_at, schema_version]
+        properties:
+          request_id: { type: string }
+          decision: { type: string, enum: [APPROVED, REJECTED, MANUAL_REVIEW] }
+          score: { type: number, minimum: 0, maximum: 100 }
+          pti: { type: number, minimum: 0 }
+          reason_code: { type: string, enum: [PTI_TOO_HIGH, LOW_SCORE, BORDERLINE, AUTO_APPROVED] }
+          decided_at: { type: string, format: date-time }
+          schema_version: { type: string, const: '2.0' }

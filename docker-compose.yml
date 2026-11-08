@@ -1,0 +1,55 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  preprocessing-service:
+    build: ./preprocessing-service
+    ports:
+      - "8000:8000"
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - QUEUE_NAME=processed_data_queue
+      - RESULTS_PATH=/data/results.json
+    volumes:
+      - ./data:/data
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  decision-service:
+    build: ./decision-service
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - QUEUE_NAME=processed_data_queue
+      - RESULTS_PATH=/data/results.json
+    volumes:
+      - ./data:/data
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  credit-application-ui:
+    build: ./credit-application-ui
+    ports:
+      - "8080:8080"
+    environment:
+      - PREPROCESSING_URL=http://preprocessing-service:8000
+    depends_on:
+      - preprocessing-service
+
+  specialist-ui:
+    build: ./specialist-ui
+    ports:
+      - "8081:8081"
+    environment:
+      - PREPROCESSING_URL=http://preprocessing-service:8000
+    depends_on:
+      - preprocessing-service
